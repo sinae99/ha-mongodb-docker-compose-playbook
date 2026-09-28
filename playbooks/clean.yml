@@ -1,0 +1,12 @@
+---
+- name: Remove MongoDB containers and data volumes
+  hosts: ansible_controller
+  connection: local
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Stop MongoDB and remove its data volume
+      ansible.builtin.command: docker compose down -v --remove-orphans
+      args:
+        chdir: "{{ mongo_project_dir }}"
+      failed_when: false

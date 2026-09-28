@@ -1,0 +1,140 @@
+---
+- name: Validate local MongoDB topology
+  ansible.builtin.assert:
+    that:
+      - mongo_members | length == 3
+      - mongo_members | map(attribute='name') | list | unique | length == 3
+      - mongo_members | map(attribute='host_port') | list | unique | length == 3
+    fail_msg: >-
+      MongoDB requires exactly three unique container names and host ports.
+
+- name: Check Docker Compose
+  ansible.builtin.command: docker compose version
+  changed_when: false
+
+- name: Check Docker daemon access
+  ansible.builtin.command: docker info
+  changed_when: false
+
+- name: Create MongoDB project directory
+  ansible.builtin.file:
+    path: "{{ mongo_project_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Render MongoDB Compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ mongo_project_dir }}/compose.yaml"
+    mode: "0644"
+
+- name: Validate rendered Docker Compose file
+  ansible.builtin.command: docker compose config --quiet
+  args:
+    chdir: "{{ mongo_project_dir }}"
+  changed_when: false
+
+- name: Start MongoDB containers
+  ansible.builtin.command: docker compose up -d
+  args:
+    chdir: "{{ mongo_project_dir }}"
+
+- name: Wait for MongoDB ports
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ item.host_port }}"
+    timeout: 90
+  loop: "{{ mongo_members }}"
+  loop_control:
+    label: "{{ item.name }}:{{ item.host_port }}"
+
+- name: Build replica-set initialization expression
+  ansible.builtin.set_fact:
+    mongo_rs_init_eval: >-
+      rs.initiate({_id:"{{ mongo_replset }}",members:[{% for member in mongo_members %}{_id:{{ loop.index0 }},host:"{{ member.name }}:{{ mongo_port }}"}{% if not loop.last %},{% endif %}{% endfor %}]})
+
+- name: Check whether the replica set is initialized
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - exec
+      - -T
+      - mongo1
+      - mongosh
+      - --quiet
+      - --port
+      - "{{ mongo_port }}"
+      - --eval
+      - "try { print(rs.status().ok) } catch (e) { print(0) }"
+    chdir: "{{ mongo_project_dir }}"
+  register: mongo_rs_initialized
+  changed_when: false
+  failed_when: false
+
+- name: Initialize the replica set
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - exec
+      - -T
+      - mongo1
+      - mongosh
+      - --quiet
+      - --port
+      - "{{ mongo_port }}"
+      - --eval
+      - "{{ mongo_rs_init_eval }}"
+    chdir: "{{ mongo_project_dir }}"
+  register: mongo_rs_init
+  retries: 12
+  delay: 5
+  until: mongo_rs_init.rc == 0
+  when: (mongo_rs_initialized.stdout | trim | default('0')) != '1'
+
+- name: Wait for all three members to appear
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - exec
+      - -T
+      - mongo1
+      - mongosh
+      - --quiet
+      - --port
+      - "{{ mongo_port }}"
+      - --eval
+      - "try { print(rs.status().members.length) } catch (e) { print(0) }"
+    chdir: "{{ mongo_project_dir }}"
+  register: mongo_rs_members
+  changed_when: false
+  retries: 60
+  delay: 5
+  until:
+    - mongo_rs_members.rc == 0
+    - (mongo_rs_members.stdout | trim | default('0') | int) == 3
+
+- name: Wait for one primary and two secondaries
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - exec
+      - -T
+      - mongo1
+      - mongosh
+      - --quiet
+      - --port
+      - "{{ mongo_port }}"
+      - --eval
+      - "try { const s = rs.status(); print(s.ok === 1 && s.members.length === 3 && s.members.filter(m => m.stateStr === 'PRIMARY').length === 1 && s.members.filter(m => m.stateStr === 'SECONDARY').length === 2 ? 1 : 0) } catch (e) { print(0) }"
+    chdir: "{{ mongo_project_dir }}"
+  register: mongo_rs_health
+  changed_when: false
+  retries: 60
+  delay: 5
+  until:
+    - mongo_rs_health.rc == 0
+    - (mongo_rs_health.stdout | trim | default('0')) == '1'

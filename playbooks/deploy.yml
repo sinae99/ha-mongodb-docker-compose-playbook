@@ -1,0 +1,45 @@
+---
+- name: Check the Ansible controller container
+  hosts: ansible_controller
+  connection: local
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Ping the controller container
+      ansible.builtin.ping:
+
+- name: Deploy three-member MongoDB replica set locally
+  hosts: ansible_controller
+  connection: local
+  become: false
+  gather_facts: false
+  roles:
+    - mongo
+
+- name: Display MongoDB replica-set members
+  hosts: ansible_controller
+  connection: local
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Show replica-set status
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - exec
+          - -T
+          - mongo1
+          - mongosh
+          - --quiet
+          - --port
+          - "{{ mongo_port }}"
+          - --eval
+          - "rs.status().members.map(m => ({name:m.name, state:m.stateStr}))"
+        chdir: "{{ mongo_project_dir }}"
+      register: mongo_rs_status
+      changed_when: false
+
+    - name: Print replica-set status
+      ansible.builtin.debug:
+        var: mongo_rs_status.stdout

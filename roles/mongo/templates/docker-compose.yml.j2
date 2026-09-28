@@ -1,0 +1,37 @@
+services:
+{% for member in mongo_members %}
+  {{ member.name }}:
+    image: {{ mongo_image }}
+    container_name: {{ member.name }}
+    hostname: {{ member.name }}
+    restart: unless-stopped
+    command:
+      - mongod
+      - --replSet
+      - {{ mongo_replset }}
+      - --bind_ip_all
+      - --port
+      - "{{ mongo_port }}"
+      - --oplogSize
+      - "2048"
+    ports:
+      - "{{ member.host_port }}:{{ mongo_port }}"
+    networks:
+      - {{ mongo_network }}
+    volumes:
+      - {{ member.name }}_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --port {{ mongo_port }} --eval \"db.adminCommand('ping').ok\" | grep -q 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+{% endfor %}
+
+volumes:
+{% for member in mongo_members %}
+  {{ member.name }}_data:
+{% endfor %}
+
+networks:
+  {{ mongo_network }}:
+    name: {{ mongo_network }}

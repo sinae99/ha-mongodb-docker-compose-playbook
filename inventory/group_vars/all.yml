@@ -1,0 +1,14 @@
+mongo_port: 27017
+mongo_replset: "rs0"
+mongo_image: "mongo:7"
+mongo_network: "mongo-ha-net"
+
+mongo_members:
+  - name: mongo1
+    host_port: 27017
+  - name: mongo2
+    host_port: 27018
+  - name: mongo3
+    host_port: 27019
+
+mongo_project_dir: "{{ playbook_dir }}/.."
